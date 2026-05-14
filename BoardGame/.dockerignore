@@ -1,0 +1,10 @@
+.git
+.gitignore
+README.md
+*.log
+target/*.original
+.mvn
+security-reports
+.dependency-check-data
+.trivy-cache
+.tmp

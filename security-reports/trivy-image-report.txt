@@ -1,0 +1,12 @@
+
+Report Summary
+
+┌──────────────────────────────┬────────┬─────────────────┐
+│            Target            │  Type  │ Vulnerabilities │
+├──────────────────────────────┼────────┼─────────────────┤
+│ boardgame:1.0 (ubuntu 22.04) │ ubuntu │        0        │
+└──────────────────────────────┴────────┴─────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+

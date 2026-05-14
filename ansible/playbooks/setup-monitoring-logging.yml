@@ -1,0 +1,375 @@
+---
+- name: Setup Monitoring and CloudWatch Logging for BoardGame Project
+  hosts: boardgame
+  become: yes
+
+  vars:
+    aws_region: "ap-south-1"
+
+    node_exporter_version: "1.10.2"
+    node_exporter_user: "node_exporter"
+    node_exporter_port: "9100"
+
+    prometheus_dir: "/opt/prometheus"
+    prometheus_container_name: "prometheus"
+    prometheus_image: "prom/prometheus"
+    prometheus_port: "9090"
+
+    docker_host_ip: "172.17.0.1"
+
+    grafana_port: "3000"
+
+    cloudwatch_agent_deb_url: "https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb"
+    cloudwatch_agent_deb_path: "/tmp/amazon-cloudwatch-agent.deb"
+    cloudwatch_agent_config_path: "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - wget
+          - gnupg
+          - apt-transport-https
+          - software-properties-common
+          - docker.io
+        state: present
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    ###########################################################################
+    # NODE EXPORTER
+    ###########################################################################
+
+    - name: Create Node Exporter user
+      user:
+        name: "{{ node_exporter_user }}"
+        shell: /bin/false
+        create_home: no
+        system: yes
+
+    - name: Download Node Exporter archive
+      get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        dest: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        mode: '0644'
+
+    - name: Extract Node Exporter archive
+      unarchive:
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        dest: "/tmp"
+        remote_src: yes
+
+    - name: Copy Node Exporter binary
+      copy:
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+        dest: "/usr/local/bin/node_exporter"
+        owner: "{{ node_exporter_user }}"
+        group: "{{ node_exporter_user }}"
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Node Exporter systemd service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          After=network.target
+
+          [Service]
+          User={{ node_exporter_user }}
+          Group={{ node_exporter_user }}
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start and enable Node Exporter
+      systemd:
+        name: node_exporter
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    ###########################################################################
+    # PROMETHEUS
+    ###########################################################################
+
+    - name: Create Prometheus directory
+      file:
+        path: "{{ prometheus_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Create Prometheus configuration file
+      copy:
+        dest: "{{ prometheus_dir }}/prometheus.yml"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+        content: |
+          global:
+            scrape_interval: 15s
+
+          scrape_configs:
+            - job_name: "prometheus"
+              static_configs:
+                - targets: ["localhost:9090"]
+
+            - job_name: "ec2-node-exporter"
+              static_configs:
+                - targets: ["{{ docker_host_ip }}:{{ node_exporter_port }}"]
+
+    - name: Remove existing Prometheus container if present
+      command: docker rm -f {{ prometheus_container_name }}
+      ignore_errors: yes
+
+    - name: Run Prometheus Docker container
+      command: >
+        docker run -d
+        --name {{ prometheus_container_name }}
+        -p {{ prometheus_port }}:9090
+        -v {{ prometheus_dir }}/prometheus.yml:/etc/prometheus/prometheus.yml
+        {{ prometheus_image }}
+
+    ###########################################################################
+    # GRAFANA
+    ###########################################################################
+
+    - name: Create Grafana keyring directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Grafana GPG key
+      get_url:
+        url: https://apt.grafana.com/gpg-full.key
+        dest: /etc/apt/keyrings/grafana.asc
+        mode: '0644'
+
+    - name: Add Grafana APT repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+        filename: grafana
+        state: present
+
+    - name: Update apt cache after adding Grafana repository
+      apt:
+        update_cache: yes
+
+    - name: Install Grafana
+      apt:
+        name: grafana
+        state: present
+
+    - name: Create Grafana Prometheus datasource provisioning directory
+      file:
+        path: /etc/grafana/provisioning/datasources
+        state: directory
+        owner: root
+        group: grafana
+        mode: '0755'
+
+    - name: Provision Prometheus datasource in Grafana
+      copy:
+        dest: /etc/grafana/provisioning/datasources/prometheus.yml
+        owner: root
+        group: grafana
+        mode: '0644'
+        content: |
+          apiVersion: 1
+
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://localhost:{{ prometheus_port }}
+              isDefault: true
+              editable: true
+
+    - name: Start and enable Grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    ###########################################################################
+    # CLOUDWATCH AGENT
+    ###########################################################################
+
+    - name: Download CloudWatch Agent package
+      get_url:
+        url: "{{ cloudwatch_agent_deb_url }}"
+        dest: "{{ cloudwatch_agent_deb_path }}"
+        mode: '0644'
+
+    - name: Install CloudWatch Agent package
+      apt:
+        deb: "{{ cloudwatch_agent_deb_path }}"
+
+    - name: Create CloudWatch Agent config directory
+      file:
+        path: /opt/aws/amazon-cloudwatch-agent/etc
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create CloudWatch Agent JSON configuration
+      copy:
+        dest: "{{ cloudwatch_agent_config_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          {
+            "agent": {
+              "metrics_collection_interval": 60,
+              "region": "{{ aws_region }}",
+              "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log",
+              "debug": false
+            },
+            "logs": {
+              "logs_collected": {
+                "files": {
+                  "collect_list": [
+                    {
+                      "file_path": "/var/log/syslog",
+                      "log_group_name": "/boardgame/ec2/syslog",
+                      "log_stream_name": "{instance_id}",
+                      "retention_in_days": 7,
+                      "timezone": "UTC"
+                    },
+                    {
+                      "file_path": "/var/log/auth.log",
+                      "log_group_name": "/boardgame/ec2/auth",
+                      "log_stream_name": "{instance_id}",
+                      "retention_in_days": 7,
+                      "timezone": "UTC"
+                    },
+                    {
+                      "file_path": "/var/lib/docker/containers/*/*-json.log",
+                      "log_group_name": "/boardgame/docker/container-logs",
+                      "log_stream_name": "{instance_id}",
+                      "retention_in_days": 7,
+                      "timezone": "UTC"
+                    },
+                    {
+                      "file_path": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log",
+                      "log_group_name": "/boardgame/cloudwatch-agent/logs",
+                      "log_stream_name": "{instance_id}",
+                      "retention_in_days": 7,
+                      "timezone": "UTC"
+                    }
+                  ]
+                }
+              }
+            },
+            "metrics": {
+              "namespace": "BoardGame/EC2",
+              "metrics_collected": {
+                "mem": {
+                  "measurement": [
+                    "mem_used_percent"
+                  ],
+                  "metrics_collection_interval": 60
+                },
+                "disk": {
+                  "resources": [
+                    "/"
+                  ],
+                  "measurement": [
+                    "used_percent"
+                  ],
+                  "metrics_collection_interval": 60
+                },
+                "cpu": {
+                  "resources": [
+                    "*"
+                  ],
+                  "measurement": [
+                    "cpu_usage_idle",
+                    "cpu_usage_iowait",
+                    "cpu_usage_user",
+                    "cpu_usage_system"
+                  ],
+                  "totalcpu": true,
+                  "metrics_collection_interval": 60
+                }
+              },
+              "append_dimensions": {
+                "InstanceId": "${aws:InstanceId}",
+                "InstanceType": "${aws:InstanceType}"
+              }
+            }
+          }
+
+    - name: Allow CloudWatch Agent to read Docker container logs
+      file:
+        path: /var/lib/docker/containers
+        mode: o+rX
+        recurse: yes
+      ignore_errors: yes
+
+    - name: Start CloudWatch Agent with configuration
+      command: >
+        /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
+        -a fetch-config
+        -m ec2
+        -s
+        -c file:{{ cloudwatch_agent_config_path }}
+
+    - name: Enable CloudWatch Agent service
+      systemd:
+        name: amazon-cloudwatch-agent
+        enabled: yes
+
+    ###########################################################################
+    # VERIFICATION
+    ###########################################################################
+
+    - name: Check Node Exporter service status
+      command: systemctl is-active node_exporter
+      register: node_exporter_status
+      ignore_errors: yes
+
+    - name: Check Prometheus container status
+      command: docker ps --filter "name={{ prometheus_container_name }}" --format "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}"
+      register: prometheus_status
+      ignore_errors: yes
+
+    - name: Check Grafana service status
+      command: systemctl is-active grafana-server
+      register: grafana_status
+      ignore_errors: yes
+
+    - name: Check CloudWatch Agent service status
+      command: systemctl is-active amazon-cloudwatch-agent
+      register: cloudwatch_status
+      ignore_errors: yes
+
+    - name: Display monitoring and logging status
+      debug:
+        msg:
+          - "Node Exporter status: {{ node_exporter_status.stdout }}"
+          - "Prometheus container: {{ prometheus_status.stdout_lines }}"
+          - "Grafana status: {{ grafana_status.stdout }}"
+          - "CloudWatch Agent status: {{ cloudwatch_status.stdout }}"
+          - "Prometheus URL: http://<EC2-PUBLIC-IP>:9090"
+          - "Grafana URL: http://<EC2-PUBLIC-IP>:3000"
+          - "Node Exporter metrics: http://<EC2-PUBLIC-IP>:9100/metrics"

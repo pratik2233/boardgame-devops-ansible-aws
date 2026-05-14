@@ -1,0 +1,40 @@
+# Maven/Java build output
+target/
+*.jar
+*.war
+*.ear
+*.class
+
+# Maven local wrapper/cache
+.mvn/
+.m2/
+
+# Logs
+*.log
+logs/
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Docker/temporary files
+.tmp/
+.trivy-cache/
+.dependency-check-data/
+
+# CloudWatch/Prometheus local data
+prometheus-data/
+grafana-data/
+
+# Large/generated security files - keep reports only if required
+security-reports/*.html
+
+# Environment/secrets
+.env
+*.pem
+*.key
+*.crt
+credentials*
+aws-credentials*
