@@ -1,0 +1,105 @@
+---
+- name: Check if BoardGame source directory exists
+  stat:
+    path: "{{ app_source_dir }}"
+  register: app_dir_status
+
+- name: Fail if BoardGame source directory does not exist
+  fail:
+    msg: "BoardGame source directory not found at {{ app_source_dir }}. Please extract BoardGame.zip first."
+  when: not app_dir_status.stat.exists
+
+- name: Check if pom.xml exists
+  stat:
+    path: "{{ app_source_dir }}/pom.xml"
+  register: pom_status
+
+- name: Fail if pom.xml does not exist
+  fail:
+    msg: "pom.xml not found in {{ app_source_dir }}. Please verify the BoardGame project folder."
+  when: not pom_status.stat.exists
+
+- name: Build BoardGame application using Maven (Java 17, non-root)
+  command: mvn -DskipTests clean package
+  args:
+    chdir: "/home/ubuntu/AWS/Automating-Secure-Deployment-of-Board-game-Listing-WebApp-on-AWS/BoardGame"
+  become: false
+  environment:
+    JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
+    PATH: "/usr/lib/jvm/java-17-openjdk-amd64/bin:{{ ansible_facts['env']['PATH'] }}"
+    HOME: "/var/lib/jenkins"
+    MAVEN_OPTS: "-Dmaven.repo.local=/var/lib/jenkins/.m2/repository"
+
+- name: Show Maven build output
+  debug:
+    var: maven_build_non_root.stdout_lines
+
+- name: Find generated jar file
+  find:
+    paths: "{{ app_source_dir }}/target"
+    patterns: "*.jar"
+    file_type: file
+  register: jar_files
+
+- name: Fail if no jar file found
+  fail:
+    msg: "No jar file found inside {{ app_source_dir }}/target after Maven build."
+  when: jar_files.files | length == 0
+
+- name: Set jar file name variable
+  set_fact:
+    jar_file_name: "{{ jar_files.files[0].path | basename }}"
+
+- name: Show detected jar file
+  debug:
+    msg: "Detected JAR file: {{ jar_file_name }}"
+
+- name: Create application log file
+  file:
+    path: "{{ app_log_file }}"
+    state: touch
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0644'
+
+- name: Deploy systemd service file
+  template:
+    src: boardgame.service.j2
+    dest: "/etc/systemd/system/{{ app_service_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart boardgame service
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start BoardGame service
+  systemd:
+    name: "{{ app_service_name }}"
+    enabled: yes
+    state: started
+
+- name: Wait for application port to become available
+  wait_for:
+    host: "127.0.0.1"
+    port: "{{ app_port }}"
+    delay: 5
+    timeout: 90
+
+- name: Validate BoardGame application locally
+  uri:
+    url: "http://127.0.0.1:{{ app_port }}"
+    method: GET
+    status_code:
+      - 200
+      - 302
+      - 401
+      - 403
+  register: app_health
+  failed_when: false
+
+- name: Show application validation result
+  debug:
+    var: app_health.status

@@ -1,0 +1,8 @@
+---
+- name: Install and configure Jenkins
+  hosts: boardgame_servers
+  become: yes
+
+  roles:
+    - java
+    - jenkins

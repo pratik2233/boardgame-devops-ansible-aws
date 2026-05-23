@@ -1,0 +1,18 @@
+---
+- name: Update apt package cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install common required packages
+  apt:
+    name:
+      - git
+      - curl
+      - wget
+      - unzip
+      - tree
+      - vim
+      - net-tools
+      - software-properties-common
+    state: present

@@ -1,66 +1,88 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
     environment {
         PROJECT_ROOT = "/home/ubuntu/AWS/Automating-Secure-Deployment-of-Board-game-Listing-WebApp-on-AWS"
-        APP_DIR = "/home/ubuntu/AWS/Automating-Secure-Deployment-of-Board-game-Listing-WebApp-on-AWS/BoardGame"
-        ANSIBLE_DIR = "/home/ubuntu/AWS/Automating-Secure-Deployment-of-Board-game-Listing-WebApp-on-AWS/ansible"
-        JAVA_HOME = "/usr/lib/jvm/java-17-openjdk-amd64"
-        PATH = "/usr/lib/jvm/java-17-openjdk-amd64/bin:${env.PATH}"
+        ANSIBLE_DIR  = "${PROJECT_ROOT}/ansible"
+        APP_DIR      = "${PROJECT_ROOT}/BoardGame"
+        APP_URL      = "http://localhost:8080"
     }
 
     stages {
-        stage('Workspace Info') {
+        stage('Verify Workspace') {
             steps {
-                echo 'Starting BoardGame CI/CD Pipeline'
-                sh 'whoami'
-                sh 'pwd'
-                sh 'java -version'
-                sh 'mvn -version'
-                sh 'docker --version'
-                sh 'ansible --version'
+                sh '''
+                    echo "Running as:"
+                    whoami
+                    echo "Project root:"
+                    ls -la ${PROJECT_ROOT}
+                    echo "BoardGame directory:"
+                    ls -la ${APP_DIR}
+                    echo "Ansible directory:"
+                    ls -la ${ANSIBLE_DIR}
+                '''
             }
         }
 
-        stage('Maven Build') {
+        stage('Verify Tools') {
             steps {
-                dir("${APP_DIR}") {
-                    sh 'mvn clean package -DskipTests'
-                }
+                sh '''
+                    java -version
+                    mvn -version
+                    ansible --version
+                    git --version
+                '''
             }
         }
 
-        stage('Docker Build') {
+        stage('Build Application') {
             steps {
-                dir("${APP_DIR}") {
-                    sh 'docker build -t boardgame:1.0 .'
-                }
+                sh '''
+                    cd ${APP_DIR}
+                    mvn clean package -DskipTests
+                '''
             }
         }
 
         stage('Deploy Using Ansible') {
             steps {
-                dir("${ANSIBLE_DIR}") {
-                    sh 'ansible-playbook playbooks/deploy-boardgame.yml'
-                }
+                sh '''
+                    cd ${ANSIBLE_DIR}
+                    ansible-playbook playbooks/deploy-boardgame.yml
+                '''
             }
         }
 
-        stage('Health Check') {
+        stage('Verify Deployment') {
             steps {
-                sh 'sleep 10'
-                sh 'curl -I http://localhost:8081'
+                sh '''
+                    sleep 10
+                    curl -I ${APP_URL}
+                    sudo systemctl status boardgame --no-pager || true
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'SUCCESS: BoardGame application deployed successfully using Jenkins and Ansible.'
+            echo "SUCCESS: BoardGame application deployed successfully through Jenkins CI/CD."
         }
 
         failure {
-            echo 'FAILED: BoardGame CI/CD pipeline failed. Please check console output.'
+            echo "FAILED: Jenkins pipeline failed. Please check the console output."
+        }
+
+        always {
+            sh '''
+                sudo systemctl status boardgame --no-pager || true
+                sudo ss -ltnp | grep ':8080' || true
+            '''
         }
     }
 }

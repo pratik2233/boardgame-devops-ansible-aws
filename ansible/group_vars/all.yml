@@ -1,0 +1,10 @@
+---
+project_root: "/home/ubuntu/AWS/Automating-Secure-Deployment-of-Board-game-Listing-WebApp-on-AWS"
+app_source_dir: "{{ project_root }}/BoardGame"
+app_name: "boardgame"
+app_user: "ubuntu"
+app_port: 8080
+app_log_file: "/var/log/boardgame-app.log"
+app_service_name: "boardgame"
+java_package: "openjdk-17-jdk"
+maven_package: "maven"

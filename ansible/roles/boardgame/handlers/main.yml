@@ -1,0 +1,6 @@
+---
+- name: Restart boardgame service
+  systemd:
+    name: boardgame
+    state: restarted
+    daemon_reload: true

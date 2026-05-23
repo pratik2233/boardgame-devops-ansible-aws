@@ -1,0 +1,16 @@
+[Unit]
+Description=BoardGame Spring Boot Application
+After=network.target
+
+[Service]
+User={{ app_user }}
+WorkingDirectory={{ app_source_dir }}
+ExecStart=/usr/bin/java -jar {{ app_source_dir }}/target/{{ jar_file_name }}
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+StandardOutput=append:{{ app_log_file }}
+StandardError=append:{{ app_log_file }}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+---
+- name: Setup BoardGame server prerequisites
+  hosts: boardgame_servers
+  become: yes
+
+  roles:
+    - common
+    - java
+    - maven

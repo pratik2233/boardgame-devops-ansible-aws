@@ -1,0 +1,139 @@
+---
+# roles/jenkins/tasks/main.yml
+
+# 0) Remove any old Jenkins repo/key that can break apt update
+- name: Remove existing Jenkins repo list (if any)
+  file:
+    path: /etc/apt/sources.list.d/jenkins.list
+    state: absent
+  become: true
+
+- name: Remove old Jenkins keyrings (if any)
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/share/keyrings/jenkins-keyring.asc
+    - /usr/share/keyrings/jenkins-keyring.gpg
+    - /usr/share/keyrings/jenkins.gpg
+  become: true
+
+# 1) Update apt cache safely (Ubuntu repos only)
+- name: Update apt cache (base repos)
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  become: true
+
+# 2) Tools needed for key install
+- name: Install required packages for Jenkins repo and tools
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - fontconfig
+    state: present
+  become: true
+
+# 3) Ensure keyrings directory exists
+- name: Ensure keyrings directory exists
+  file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: "0755"
+  become: true
+
+# 4) IMPORTANT: Use the NEW Jenkins repo signing key (2026)
+# LTS (debian-stable): https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+- name: Download Jenkins repository signing key (2026)
+  get_url:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+    dest: /usr/share/keyrings/jenkins-keyring.asc
+    mode: "0644"
+  become: true
+
+# 5) Add Jenkins apt repository using signed-by
+- name: Add Jenkins apt repository (signed-by keyring)
+  copy:
+    dest: /etc/apt/sources.list.d/jenkins.list
+    content: |
+      deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# 6) Update apt cache after adding Jenkins repo (should work now)
+- name: Update apt cache after adding Jenkins repo
+  apt:
+    update_cache: yes
+  become: true
+
+# 7) Install Jenkins
+- name: Install Jenkins
+  apt:
+    name: jenkins
+    state: present
+  become: true
+
+# 8) Ensure Java 21 is installed (required by newer Jenkins)
+- name: Ensure Java 21 is installed
+  apt:
+    name: openjdk-21-jdk
+    state: present
+  become: true
+
+# 9) Configure Jenkins runtime (port + JAVA_HOME)
+- name: Set JAVA_HOME for Jenkins
+  lineinfile:
+    path: /etc/default/jenkins
+    regexp: '^JAVA_HOME='
+    line: 'JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64'
+    create: yes
+  become: true
+
+- name: Set Jenkins HTTP port to 8081 (avoid Docker conflict on 8080)
+  lineinfile:
+    path: /etc/default/jenkins
+    regexp: '^HTTP_PORT='
+    line: 'HTTP_PORT=8081'
+  become: true
+
+# 10) Enforce port via systemd override (some builds ignore /etc/default/jenkins)
+- name: Create systemd override directory for Jenkins
+  file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Force Jenkins port via systemd override
+  copy:
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
+    content: |
+      [Service]
+      Environment="JENKINS_PORT=8081"
+      Environment="JENKINS_ARGS=--httpPort=8081"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# 11) Restart Jenkins
+- name: Reload systemd and restart Jenkins
+  systemd:
+    daemon_reload: true
+    name: jenkins
+    enabled: true
+    state: restarted
+  become: true
+
+- name: Wait for Jenkins on port 8081
+  wait_for:
+    host: 127.0.0.1
+    port: 8081
+    delay: 3
+    timeout: 120
+  become: true
+

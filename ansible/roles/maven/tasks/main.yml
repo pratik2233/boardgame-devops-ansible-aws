@@ -1,0 +1,10 @@
+---
+- name: Install Maven
+  apt:
+    name: "{{ maven_package }}"
+    state: present
+
+- name: Verify Maven installation
+  command: mvn -version
+  register: maven_version
+ 
